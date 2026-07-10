@@ -41,7 +41,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # 8) 비루트 사용자로 실행 (보안 강화)
-RUN useradd -m -u 1000 appuser
+RUN useradd -m -u 10001 appuser
 USER appuser
 
 # 9) 서버 기동
