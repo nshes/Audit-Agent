@@ -87,7 +87,7 @@ class OrchestratorClient:
       POST {base_url}/upstageknu2607/db/workflows/{report_id}/agents/audit_agent/invocations
     """
 
-    AGENT_NAME = "audit_agent"
+    AGENT_NAME = "final_audit"
     TIMEOUT = 30.0
 
     def __init__(self) -> None:
@@ -133,6 +133,7 @@ class OrchestratorClient:
         trace_id: Optional[str] = None,
         request_id: Optional[str] = None,
         duration_ms: Optional[int] = None,
+        agent_job_id: Optional[int] = None,
     ) -> None:
         """POST /upstageknu2607/db/workflows/{report_id}/agents/audit_agent/invocations"""
         url = (
@@ -140,8 +141,11 @@ class OrchestratorClient:
             f"/agents/{self.AGENT_NAME}/invocations"
         )
         payload: Dict[str, Any] = {
+            "status_code": 200,
+            "message": "final_audit completed",
             "status": "SUCCEEDED",
             "output": audit_result,
+            "agent_job_id": agent_job_id,
             "model": "solar-pro2",
         }
         if trace_id:
@@ -337,6 +341,7 @@ class InvokeRequest(BaseModel):
         description="오케스트레이터가 생성한 요청 ID",
         examples=["req-audit-001"],
     )
+    agent_job_id: Optional[int] = Field(None, description="claimed workflow_agent_jobs.id")
 
 
 class InvokeResponse(BaseModel):
@@ -488,6 +493,7 @@ def invoke(request: InvokeRequest) -> InvokeResponse:
             trace_id=request.trace_id,
             request_id=request.request_id,
             duration_ms=duration_ms,
+            agent_job_id=request.agent_job_id,
         )
 
     # 5) 표준 응답 형식으로 반환

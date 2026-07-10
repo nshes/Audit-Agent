@@ -1,4 +1,4 @@
-name: audit-agent
+name: final_audit
 version: "1.0.0"
 description: >
   버그 바운티 / 취약점 제보 파이프라인 감사 에이전트.
