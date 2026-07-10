@@ -46,6 +46,9 @@ from audit_agent import (
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("audit_app")
+SOLAR_MODEL = os.environ.get("SOLAR_MODEL", "solar-pro3")
+UPSTAGE_BASE_URL = os.environ.get("UPSTAGE_BASE_URL", "https://api.upstage.ai/v1")
+
 
 # ---------------------------------------------------------------------------
 # FastAPI 앱 초기화
@@ -146,7 +149,7 @@ class OrchestratorClient:
             "status": "SUCCEEDED",
             "output": audit_result,
             "agent_job_id": agent_job_id,
-            "model": "solar-pro2",
+            "model": SOLAR_MODEL,
         }
         if trace_id:
             payload["trace_id"] = trace_id
@@ -432,7 +435,7 @@ def health_check() -> HealthResponse:
         "`report_id` / `trace_id` / `request_id` 를 받아 아래 순서로 실행합니다:\n\n"
         "1. `GET {ORCHESTRATOR_BASE_URL}/upstageknu2607/db/workflows/{report_id}` 로 공통 JSON 조회\n"
         "2. 결정론적 사전검사 (VIOLATION 발견 시 즉시 `audit_status: FAIL` 확정)\n"
-        "3. LLM(solar-pro2) 감사 수행\n"
+        f"3. LLM({SOLAR_MODEL}) 감사 수행\n"
         "4. `POST .../agents/audit_agent/invocations` 로 결과 등록\n"
         "5. 표준 응답 형식으로 결과 반환\n\n"
         "> ⚠️ `UPSTAGE_API_KEY`와 `ORCHESTRATOR_BASE_URL`이 반드시 설정되어 있어야 합니다."
@@ -472,7 +475,13 @@ def invoke(request: InvokeRequest) -> InvokeResponse:
 
         # 2~3) 감사 수행
         ctx = _extract_audit_context(report)
-        agent = AuditAgent(AuditAgentConfig(api_key=upstage_key))
+        agent = AuditAgent(
+            AuditAgentConfig(
+                api_key=upstage_key,
+                model=SOLAR_MODEL,
+                base_url=UPSTAGE_BASE_URL,
+            )
+        )
         audit_result = agent.run(
             parser_result=ctx["parser_result"],
             fact_check_result=ctx["fact_check_result"],

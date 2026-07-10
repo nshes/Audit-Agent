@@ -66,7 +66,7 @@ Orchestrator
               ├─ 결정론적 사전검사 (LLM 없음)
               │   → VIOLATION 발견 시 즉시 audit_status: FAIL 확정
               │
-              ├─ LLM 감사 (Upstage solar-pro2)
+              ├─ LLM 감사 (Upstage solar-pro3)
               │
               ├─ POST {ORCHESTRATOR_BASE_URL}/upstageknu2607/db/workflows/{report_id}
               │       /agents/audit_agent/invocations

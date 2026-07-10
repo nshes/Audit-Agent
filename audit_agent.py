@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -279,8 +280,14 @@ class UpstageCallError(Exception):
 @dataclass
 class AuditAgentConfig:
     api_key: str
-    model: str = "solar-pro2"
-    base_url: str = "https://api.upstage.ai/v1"
+    model: str = field(
+        default_factory=lambda: os.getenv("SOLAR_MODEL", "solar-pro3")
+    )
+    base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "UPSTAGE_BASE_URL", "https://api.upstage.ai/v1"
+        )
+    )
     timeout: float = 30.0
     max_retries: int = 3
     temperature: float = 0.0
