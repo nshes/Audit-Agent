@@ -34,7 +34,7 @@ from typing import Any, Dict, Generator, List, Optional
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 load_dotenv()
 
@@ -260,11 +260,25 @@ class FactCheckAgentResult(BaseModel):
 
 
 class DedupMatch(BaseModel):
-    title: str
-    similarity: float
-    same_root_cause: bool
+    title: Optional[str] = None
+    similarity: Optional[float] = None
+    semantic_similarity: Optional[float] = None
+    best_similarity: Optional[float] = None
+    same_root_cause: Optional[bool] = None
     previous_result: Optional[str] = None
     model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_similarity(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or value.get("similarity") is not None:
+            return value
+        normalized = dict(value)
+        for key in ("semantic_similarity", "best_similarity"):
+            if normalized.get(key) is not None:
+                normalized["similarity"] = normalized[key]
+                break
+        return normalized
 
 
 class DedupAgentResult(BaseModel):
