@@ -302,6 +302,12 @@ class AuditAgent:
         self.config = config
         self.client = OpenAI(api_key=config.api_key, base_url=config.base_url, timeout=config.timeout)
         self.deterministic_checks = DeterministicAuditChecks()
+        self.token_usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "llm_calls": 0,
+        }
 
     # ---- 공개 API ----
 
@@ -405,6 +411,11 @@ class AuditAgent:
                     kwargs["response_format"] = {"type": "json_object"}
 
                 response = self.client.chat.completions.create(**kwargs)
+                usage = response.usage
+                self.token_usage["prompt_tokens"] += int(getattr(usage, "prompt_tokens", 0) or 0)
+                self.token_usage["completion_tokens"] += int(getattr(usage, "completion_tokens", 0) or 0)
+                self.token_usage["total_tokens"] += int(getattr(usage, "total_tokens", 0) or 0)
+                self.token_usage["llm_calls"] += 1
                 content = response.choices[0].message.content
                 if not content:
                     raise UpstageCallError("빈 응답")

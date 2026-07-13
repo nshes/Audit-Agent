@@ -137,6 +137,7 @@ class OrchestratorClient:
         request_id: Optional[str] = None,
         duration_ms: Optional[int] = None,
         agent_job_id: Optional[int] = None,
+        token_usage: Optional[Dict[str, int]] = None,
     ) -> None:
         """POST /upstageknu2607/db/workflows/{report_id}/agents/audit_agent/invocations"""
         url = (
@@ -150,6 +151,7 @@ class OrchestratorClient:
             "output": audit_result,
             "agent_job_id": agent_job_id,
             "model": SOLAR_MODEL,
+            "token_usage": token_usage or {},
         }
         if trace_id:
             payload["trace_id"] = trace_id
@@ -354,6 +356,7 @@ class InvokeResponse(BaseModel):
     status_code: int = Field(..., description="HTTP 상태 코드", examples=[200])
     message: str = Field(..., description="처리 결과 요약 메시지", examples=["audit completed"])
     output: Dict[str, Any] = Field(..., description="감사 결과 상세 데이터")
+    token_usage: Dict[str, int] = Field(default_factory=dict, description="이번 호출의 LLM 토큰 사용량")
 
 
 class HealthResponse(BaseModel):
@@ -492,6 +495,7 @@ def invoke(request: InvokeRequest) -> InvokeResponse:
             workflow_status=ctx["workflow_status"],
         )
         audit_result["report_id"] = report.report_id
+        token_usage = dict(agent.token_usage)
 
         duration_ms = int(time.time() * 1000) - start_ms
 
@@ -503,6 +507,7 @@ def invoke(request: InvokeRequest) -> InvokeResponse:
             request_id=request.request_id,
             duration_ms=duration_ms,
             agent_job_id=request.agent_job_id,
+            token_usage=token_usage,
         )
 
     # 5) 표준 응답 형식으로 반환
@@ -510,4 +515,5 @@ def invoke(request: InvokeRequest) -> InvokeResponse:
         status_code=200,
         message="audit completed",
         output=audit_result,
+        token_usage=token_usage,
     )
