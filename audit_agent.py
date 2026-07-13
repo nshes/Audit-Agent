@@ -173,7 +173,7 @@ class DeterministicAuditChecks:
                     "- 절차 6(can_compile 호출) 미준수 가능성",
                     "VIOLATION",
                 ))
-        if not judge.get("verdict"):
+        if judge.get("verdict") is None or judge.get("verdict") == "":
             findings.append(DeterministicFinding(
                 "INCOMPLETE_JUDGE_STAGE",
                 "debate_judge_result.verdict가 비어 있음 - 찬반토론 Judge 단계가 완료되지 않은 채로 "
@@ -188,11 +188,11 @@ class DeterministicAuditChecks:
 
         dedup = ctx.get("dedup_result") or {}
         verdict = dedup.get("verdict")
-        if verdict is not None and verdict not in ("DUPLICATE", "NOT_DUPLICATE"):
+        if verdict is not None and verdict not in ("DUPLICATE", "POSSIBLE_DUPLICATE", "NO_MATCH", "NOT_DUPLICATE"):
             findings.append(DeterministicFinding(
                 "INVALID_DEDUP_VERDICT",
                 f"dedup_result.verdict가 정의되지 않은 값 '{verdict}'임 - 중복 판별 Agent의 "
-                "출력 스키마(DUPLICATE|NOT_DUPLICATE) 위반",
+                "출력 스키마(DUPLICATE|POSSIBLE_DUPLICATE|NO_MATCH) 위반",
                 "VIOLATION",
             ))
 
@@ -254,7 +254,9 @@ SYSTEM_PROMPT = """너는 전체 과정 감사(Audit) Agent다.
 5. fact_check_result와 충돌하는 다른 Agent의 주장은 신뢰해서는 안 된다.
 6. '글이 AI가 쓴 것 같다'는 주관적인 인상이 판단 근거로 사용되어서는 안 된다.
 7. debate_judge_result는 공용 JSON의 debate.judge를 우선하고, 비어 있는 필드는 debate.verdict에서
-   보완한 정규화 결과다. verdict가 채워져 있다면 Judge 단계 미완료로 판단해서는 안 된다.
+   보완한 정규화 결과다. 현재 verdict는 0~10 숫자이며 높을수록 진위/신뢰도와 보안 영향이 높다.
+   기존 문자열 verdict도 하위 호환 입력으로 허용한다. 숫자 0을 포함해 verdict가 채워져 있다면
+   Judge 단계 미완료로 판단해서는 안 된다.
 수행 절차:
 1. 입력된 전체 과정 파일(parser, fact_check, dedup, debate_judge)을 취합한다.
 2. 각 단계의 결과물이 '중요 원칙'을 위배하지 않고 정당하게 도출되었는지 하나씩 검증한다.

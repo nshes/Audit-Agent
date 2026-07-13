@@ -34,7 +34,7 @@ from typing import Any, Dict, Generator, List, Optional
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 load_dotenv()
 
@@ -300,12 +300,21 @@ class DebateSideAgent(BaseModel):
 
 
 class DebateJudgeAgentResult(BaseModel):
-    verdict: Optional[str] = None
+    verdict: Optional[int | float | str] = None
     winning_side: Optional[str] = None
     reason: Optional[str] = None
     confidence: Optional[float] = None
     next_step: Optional[str] = None
     model_config = {"extra": "allow"}
+
+    @field_validator("verdict", mode="before")
+    @classmethod
+    def validate_verdict(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("boolean debate verdict is not allowed")
+        if isinstance(value, (int, float)) and not 0 <= value <= 10:
+            raise ValueError("numeric debate verdict must be between 0 and 10")
+        return value
 
 
 class DebateSection(BaseModel):

@@ -5,7 +5,7 @@ from audit_agent import DeterministicAuditChecks
 
 
 class DebateVerdictFallbackTest(unittest.TestCase):
-    def test_uses_top_level_verdict_when_judge_is_empty(self):
+    def test_uses_numeric_top_level_verdict_when_judge_is_empty(self):
         report = PipelineReport.model_validate({
             "report_id": "RPT-TEST",
             "workflow_status": "DEBATED",
@@ -20,7 +20,7 @@ class DebateVerdictFallbackTest(unittest.TestCase):
                         "next_step": None,
                     },
                     "verdict": {
-                        "verdict": "VALID_LIKELY",
+                        "verdict": 0,
                         "winning_side": "VULNERABLE",
                         "reason": "verified",
                         "confidence": 0.76,
@@ -32,7 +32,7 @@ class DebateVerdictFallbackTest(unittest.TestCase):
 
         context = _extract_audit_context(report)
 
-        self.assertEqual(context["debate_judge_result"]["verdict"], "VALID_LIKELY")
+        self.assertEqual(context["debate_judge_result"]["verdict"], 0)
         self.assertEqual(context["debate_judge_result"]["confidence"], 0.76)
         findings = DeterministicAuditChecks().run(context)
         self.assertNotIn("INCOMPLETE_JUDGE_STAGE", {finding.code for finding in findings})
