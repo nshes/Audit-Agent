@@ -299,6 +299,7 @@ class DebateSection(BaseModel):
     vulnerable_agent: Optional[DebateSideAgent] = None
     not_vulnerable_agent: Optional[DebateSideAgent] = None
     judge: Optional[DebateJudgeAgentResult] = None
+    verdict: Optional[DebateJudgeAgentResult] = None
     model_config = {"extra": "allow"}
 
 
@@ -397,11 +398,22 @@ def _job_context(job_id: str) -> Generator[None, None, None]:
 def _extract_audit_context(report: PipelineReport) -> Dict[str, Any]:
     ar = report.agent_results or AgentResults()
     debate = ar.debate or DebateSection()
+    fallback_judge = (debate.verdict or DebateJudgeAgentResult()).model_dump()
+    explicit_judge = (debate.judge or DebateJudgeAgentResult()).model_dump()
+    resolved_judge = {
+        key: value
+        for key, value in fallback_judge.items()
+    }
+    resolved_judge.update({
+        key: value
+        for key, value in explicit_judge.items()
+        if value is not None and value != ""
+    })
     return {
         "parser_result":               (ar.parser or ParserAgentResult()).model_dump(),
         "fact_check_result":           (ar.fact_check or FactCheckAgentResult()).model_dump(),
         "dedup_result":                (ar.dedup or DedupAgentResult()).model_dump(),
-        "debate_judge_result":         (debate.judge or DebateJudgeAgentResult()).model_dump(),
+        "debate_judge_result":         DebateJudgeAgentResult.model_validate(resolved_judge).model_dump(),
         "vulnerable_agent_result":     (debate.vulnerable_agent or DebateSideAgent()).model_dump(),
         "not_vulnerable_agent_result": (debate.not_vulnerable_agent or DebateSideAgent()).model_dump(),
         "workflow_status":             report.workflow_status,
