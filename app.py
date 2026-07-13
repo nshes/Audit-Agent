@@ -217,21 +217,21 @@ class ParserAgentResult(BaseModel):
 
 class FunctionCheckItem(BaseModel):
     name: str
-    exists: bool
+    exists: Optional[bool] = None
     location: Optional[str] = None
     model_config = {"extra": "allow"}
 
 
 class CommitCheckItem(BaseModel):
     ref: str
-    exists: bool
+    exists: Optional[bool] = None
     reason: Optional[str] = None
     model_config = {"extra": "allow"}
 
 
 class HeaderCheckItem(BaseModel):
     name: str
-    exists: bool
+    exists: Optional[bool] = None
     model_config = {"extra": "allow"}
 
 

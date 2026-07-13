@@ -11,6 +11,7 @@ class DebateVerdictFallbackTest(unittest.TestCase):
             "workflow_status": "DEBATED",
             "input": {"raw_report_txt": "test"},
             "agent_results": {
+                "fact_check": {"commit_check": [{"ref": "unknown", "exists": None}]},
                 "debate": {
                     "judge": {
                         "verdict": None,
