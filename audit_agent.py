@@ -411,7 +411,7 @@ class AuditAgent:
                     kwargs["response_format"] = {"type": "json_object"}
 
                 response = self.client.chat.completions.create(**kwargs)
-                usage = response.usage
+                usage = getattr(response, "usage", None)
                 self.token_usage["prompt_tokens"] += int(getattr(usage, "prompt_tokens", 0) or 0)
                 self.token_usage["completion_tokens"] += int(getattr(usage, "completion_tokens", 0) or 0)
                 self.token_usage["total_tokens"] += int(getattr(usage, "total_tokens", 0) or 0)
