@@ -288,6 +288,20 @@ class DedupAgentResult(BaseModel):
     duplicate_of: Optional[str] = None
     model_config = {"extra": "allow"}
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_verdict(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        verdict = normalized.get("verdict") or normalized.get("dedup_status")
+        if isinstance(verdict, str):
+            canonical = verdict.strip().upper()
+            if canonical in {"NO_DUPLICATE_FOUND", "NOT_DUPLICATE"}:
+                canonical = "NO_MATCH"
+            normalized["verdict"] = canonical
+        return normalized
+
 
 class DebateSideAgent(BaseModel):
     position: Optional[str] = None

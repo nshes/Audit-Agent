@@ -116,6 +116,7 @@ Orchestrator
     "routing_decision": "HUMAN_REVIEW",
     "priority": "NORMAL",
     "reason": "인용된 함수와 호출 경로가 실제 코드베이스에서 확인됨. PoC 부재로 재현 필요.",
+    "failure_codes": [],
     "key_points_for_human": [
       "curl_mfprintf 함수 존재 확인됨",
       "PoC 컴파일 불가 — 재현 검증 필요"
@@ -123,6 +124,12 @@ Orchestrator
   }
 }
 ```
+
+`failure_codes`는 필수 필드입니다. `PASS`이면 빈 배열이어야 하고,
+`FAIL`이면 `UPPER_SNAKE_CASE` 코드가 하나 이상 있어야 합니다.
+`reason`과 `audit_status`가 명백히 모순되면 해당 응답을 거부하고 한 번
+자가 수정 재시도를 수행합니다. `workflow_status=DROPPED`인 입력은 Debate가
+실행되지 않은 정상 종료 경로이므로 빈 Debate verdict를 위반으로 보지 않습니다.
 
 ---
 

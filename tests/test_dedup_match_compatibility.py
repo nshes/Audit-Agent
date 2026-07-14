@@ -55,6 +55,62 @@ class DedupMatchCompatibilityTest(unittest.TestCase):
         self.assertEqual(match["similarity"], 0.91)
         self.assertTrue(match["same_root_cause"])
 
+    def test_dropped_workflow_accepts_missing_debate_as_skipped(self):
+        report = PipelineReport.model_validate({
+            "report_id": "RPT-DROPPED",
+            "workflow_status": "DROPPED",
+            "input": {"raw_report_txt": "test"},
+            "agent_results": {"dedup": {"verdict": "DUPLICATE"}},
+        })
+
+        findings = DeterministicAuditChecks().run(_extract_audit_context(report))
+
+        self.assertNotIn(
+            "INCOMPLETE_JUDGE_STAGE", {finding.code for finding in findings}
+        )
+
+    def test_non_dropped_workflow_still_requires_debate(self):
+        report = PipelineReport.model_validate({
+            "report_id": "RPT-RUNNING",
+            "workflow_status": "RUNNING",
+            "input": {"raw_report_txt": "test"},
+            "agent_results": {},
+        })
+
+        findings = DeterministicAuditChecks().run(_extract_audit_context(report))
+
+        self.assertIn(
+            "INCOMPLETE_JUDGE_STAGE", {finding.code for finding in findings}
+        )
+
+    def test_legacy_no_duplicate_verdict_is_normalized(self):
+        report = PipelineReport.model_validate({
+            "report_id": "RPT-LEGACY-ENUM",
+            "workflow_status": "DROPPED",
+            "input": {"raw_report_txt": "test"},
+            "agent_results": {
+                "dedup": {"verdict": "NO_DUPLICATE_FOUND"}
+            },
+        })
+
+        context = _extract_audit_context(report)
+        self.assertEqual(context["dedup_result"]["verdict"], "NO_MATCH")
+        findings = DeterministicAuditChecks().run(context)
+        self.assertNotIn(
+            "INVALID_DEDUP_VERDICT", {finding.code for finding in findings}
+        )
+
+    def test_not_duplicate_alias_is_normalized(self):
+        report = PipelineReport.model_validate({
+            "report_id": "RPT-LEGACY-NOT-DUPLICATE",
+            "workflow_status": "DROPPED",
+            "input": {"raw_report_txt": "test"},
+            "agent_results": {"dedup": {"verdict": "NOT_DUPLICATE"}},
+        })
+
+        context = _extract_audit_context(report)
+        self.assertEqual(context["dedup_result"]["verdict"], "NO_MATCH")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,7 +7,8 @@ audit_agent.py
 - parser_result, fact_check_result, dedup_result, debate_judge_result 및 각 단계의
   실행 로그를 받아, 앞선 단계들이 정의된 원칙과 절차를 실제로 지켰는지 감사한다.
 - 리포트를 승인/기각하지 않는다. AUTO_REJECT/DUPLICATE를 이 단계가 새로 정하지 않는다.
-- routing_decision / priority / audit_status(PASS 또는 FAIL) / reason / key_points_for_human만 낸다.
+- routing_decision / priority / audit_status(PASS 또는 FAIL) / failure_codes /
+  reason / key_points_for_human만 낸다.
 
 핵심 설계 결정: "감사"는 상당 부분 결정론적으로 검증 가능하다
 ------------------------------------------------------------
@@ -33,13 +34,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from openai import APIConnectionError, APIError, APITimeoutError, OpenAI, RateLimitError
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 logger = logging.getLogger("audit_agent")
 
@@ -72,12 +74,65 @@ class AuditResult(BaseModel):
     priority: Priority
     audit_status: AuditStatus
     reason: str = Field(..., min_length=1)
+    failure_codes: List[str]
     key_points_for_human: List[str] = Field(default_factory=list)
+
+    @field_validator("failure_codes")
+    @classmethod
+    def _clean_failure_codes(cls, value: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        for code in value:
+            normalized = (code or "").strip().upper()
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]*", normalized):
+                raise ValueError("failure_codes must use UPPER_SNAKE_CASE")
+            if normalized not in cleaned:
+                cleaned.append(normalized)
+        return cleaned
 
     @field_validator("key_points_for_human")
     @classmethod
     def _clean_points(cls, v: List[str]) -> List[str]:
         return [p.strip() for p in v if p and p.strip()][:10]
+
+    @model_validator(mode="after")
+    def _validate_status_consistency(self) -> "AuditResult":
+        if self.audit_status == AuditStatus.PASS and self.failure_codes:
+            raise ValueError("PASS requires an empty failure_codes array")
+        if self.audit_status == AuditStatus.FAIL and not self.failure_codes:
+            raise ValueError("FAIL requires at least one failure code")
+
+        reason = self.reason.casefold()
+        if self.audit_status == AuditStatus.FAIL:
+            pass_claims = (
+                "모든 단계가 정의된 원칙과 절차를 준수",
+                "위반이 발견되지 않았",
+                "문제 없음",
+                "no violations found",
+                "all checks passed",
+                "fully compliant",
+            )
+            if any(claim in reason for claim in pass_claims):
+                raise ValueError("FAIL reason contradicts audit_status")
+        else:
+            for negated in (
+                "위반이 발견되지 않았",
+                "위반 없음",
+                "위반하지 않",
+                "no violation",
+                "no issues",
+            ):
+                reason = reason.replace(negated, "")
+            fail_claims = (
+                "[결정론적 검사에 의해 fail",
+                "원칙 위반으로 판단",
+                "절차 위반",
+                "감사 실패",
+                "schema validation failed",
+                "confirmed violation",
+            )
+            if any(claim in reason for claim in fail_claims):
+                raise ValueError("PASS reason contradicts audit_status")
+        return self
 
 
 AUDIT_RESULT_JSON_SCHEMA = {
@@ -89,9 +144,16 @@ AUDIT_RESULT_JSON_SCHEMA = {
             "priority": {"type": "string", "enum": [e.value for e in Priority]},
             "audit_status": {"type": "string", "enum": [e.value for e in AuditStatus]},
             "reason": {"type": "string"},
+            "failure_codes": {
+                "type": "array",
+                "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+            },
             "key_points_for_human": {"type": "array", "items": {"type": "string"}},
         },
-        "required": ["routing_decision", "priority", "audit_status", "reason", "key_points_for_human"],
+        "required": [
+            "routing_decision", "priority", "audit_status", "reason",
+            "failure_codes", "key_points_for_human"
+        ],
         "additionalProperties": False,
     },
     "strict": True,
@@ -104,6 +166,7 @@ SAFE_FALLBACK = AuditResult(
     priority=Priority.NORMAL,
     audit_status=AuditStatus.FAIL,
     reason="감사 Agent 응답이 스키마 검증을 통과하지 못해 안전 기본값(FAIL)으로 처리함 - 사람이 직접 감사 필요",
+    failure_codes=["AUDIT_SCHEMA_VALIDATION_FAILED"],
     key_points_for_human=["자동 감사 실패 케이스입니다. 원본 LLM 응답 로그와 결정론적 사전검사 결과를 함께 확인하세요."],
 )
 
@@ -173,7 +236,10 @@ class DeterministicAuditChecks:
                     "- 절차 6(can_compile 호출) 미준수 가능성",
                     "VIOLATION",
                 ))
-        if judge.get("verdict") is None or judge.get("verdict") == "":
+        workflow_dropped = str(ctx.get("workflow_status") or "").upper() == "DROPPED"
+        if not workflow_dropped and (
+            judge.get("verdict") is None or judge.get("verdict") == ""
+        ):
             findings.append(DeterministicFinding(
                 "INCOMPLETE_JUDGE_STAGE",
                 "debate_judge_result.verdict가 비어 있음 - 찬반토론 Judge 단계가 완료되지 않은 채로 "
@@ -188,7 +254,7 @@ class DeterministicAuditChecks:
 
         dedup = ctx.get("dedup_result") or {}
         verdict = dedup.get("verdict")
-        if verdict is not None and verdict not in ("DUPLICATE", "POSSIBLE_DUPLICATE", "NO_MATCH", "NOT_DUPLICATE"):
+        if verdict is not None and verdict not in ("DUPLICATE", "POSSIBLE_DUPLICATE", "NO_MATCH"):
             findings.append(DeterministicFinding(
                 "INVALID_DEDUP_VERDICT",
                 f"dedup_result.verdict가 정의되지 않은 값 '{verdict}'임 - 중복 판별 Agent의 "
@@ -267,6 +333,9 @@ SYSTEM_PROMPT = """너는 전체 과정 감사(Audit) Agent다.
 추가 지침: 이 요청에는 '결정론적 사전검사 결과(deterministic_precheck)'가 함께 제공된다.
 severity가 "VIOLATION"인 항목이 하나라도 있으면 반드시 audit_status를 "FAIL"로 판단하라.
 severity가 "WARNING"인 항목은 참고하되, 실제 내용을 보고 정말 원칙 위반인지 스스로 판단하라.
+failure_codes는 반드시 포함하라. PASS이면 빈 배열이어야 하고, FAIL이면 원인을 나타내는
+UPPER_SNAKE_CASE 코드가 하나 이상 있어야 한다. reason은 audit_status 및 failure_codes와
+모순되어서는 안 된다.
 
 출력 규칙:
 반드시 JSON만 출력한다.
@@ -365,7 +434,9 @@ class AuditAgent:
                 "role": "user",
                 "content": (
                     "이전 응답이 JSON 스키마를 만족하지 않았다. routing_decision/priority/"
-                    "audit_status는 반드시 정의된 값 중 하나여야 한다. 다른 텍스트 없이 "
+                    "audit_status는 반드시 정의된 값 중 하나여야 한다. failure_codes를 반드시 "
+                    "포함하고 PASS이면 빈 배열, FAIL이면 UPPER_SNAKE_CASE 코드 1개 이상으로 "
+                    "작성하라. reason은 audit_status와 모순되면 안 된다. 다른 텍스트 없이 "
                     "JSON 객체만 다시 출력하라."
                 ),
             }]
@@ -382,14 +453,26 @@ class AuditAgent:
 
         # 3) 결정론적 VIOLATION이 있으면 LLM 의견과 무관하게 FAIL로 강제 덮어쓴다.
         forced_fail = False
-        if has_hard_violation and result.audit_status != AuditStatus.FAIL:
-            forced_fail = True
-            violation_summary = "; ".join(f.message for f in findings if f.severity == "VIOLATION")
+        if has_hard_violation:
+            violation_findings = [
+                f for f in findings if f.severity == "VIOLATION"
+            ]
+            violation_summary = "; ".join(f.message for f in violation_findings)
+            failure_codes = list(dict.fromkeys(
+                [*result.failure_codes, *(f.code for f in violation_findings)]
+            ))
+            forced_fail = result.audit_status != AuditStatus.FAIL
             result = result.model_copy(update={
                 "audit_status": AuditStatus.FAIL,
-                "reason": f"[결정론적 검사에 의해 FAIL로 강제 조정됨] {violation_summary} | 원본 LLM 판단: {result.reason}",
+                "failure_codes": failure_codes,
+                "reason": (
+                    f"[결정론적 검사에 의해 FAIL로 강제 조정됨] {violation_summary} "
+                    f"| 원본 LLM 판단: {result.reason}"
+                    if forced_fail else result.reason
+                ),
             })
-            logger.warning("LLM이 PASS를 냈으나 결정론적 VIOLATION이 있어 FAIL로 강제 덮어씀")
+            if forced_fail:
+                logger.warning("LLM이 PASS를 냈으나 결정론적 VIOLATION이 있어 FAIL로 강제 덮어씀")
 
         self._log_decision(ctx, findings, result, used_fallback, forced_fail)
         return result.model_dump()
@@ -474,7 +557,7 @@ class AuditAgent:
     ) -> None:
         logger.info(
             "AUDIT_DECISION status=%s routing=%s priority=%s fallback=%s forced_fail=%s "
-            "violations=%d warnings=%d judge_verdict=%s reason=%s",
+            "violations=%d warnings=%d judge_verdict=%s failure_codes=%s reason=%s",
             result.audit_status.value,
             result.routing_decision.value,
             result.priority.value,
@@ -483,6 +566,7 @@ class AuditAgent:
             sum(1 for f in findings if f.severity == "VIOLATION"),
             sum(1 for f in findings if f.severity == "WARNING"),
             (ctx.get("debate_judge_result") or {}).get("verdict"),
+            result.failure_codes,
             result.reason[:200],
         )
 
