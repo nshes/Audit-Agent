@@ -323,6 +323,9 @@ SYSTEM_PROMPT = """너는 전체 과정 감사(Audit) Agent다.
    보완한 정규화 결과다. 현재 verdict는 0~10 숫자이며 높을수록 진위/신뢰도와 보안 영향이 높다.
    기존 문자열 verdict도 하위 호환 입력으로 허용한다. 숫자 0을 포함해 verdict가 채워져 있다면
    Judge 단계 미완료로 판단해서는 안 된다.
+8. audit_status는 리포트의 취약점 여부가 아니라 파이프라인의 절차 준수 여부다.
+   PoC가 RAN_CLEAN인 것, debate verdict가 낮은 것, 결론이 not_supported/not vulnerable인 것은
+   앞선 Agent 결과가 서로 일관되고 정해진 절차를 수행했다면 감사 실패 사유가 아니다.
 수행 절차:
 1. 입력된 전체 과정 파일(parser, fact_check, dedup, debate_judge)을 취합한다.
 2. 각 단계의 결과물이 '중요 원칙'을 위배하지 않고 정당하게 도출되었는지 하나씩 검증한다.
@@ -332,6 +335,9 @@ SYSTEM_PROMPT = """너는 전체 과정 감사(Audit) Agent다.
 
 추가 지침: 이 요청에는 '결정론적 사전검사 결과(deterministic_precheck)'가 함께 제공된다.
 severity가 "VIOLATION"인 항목이 하나라도 있으면 반드시 audit_status를 "FAIL"로 판단하라.
+반대로 severity가 "VIOLATION"인 항목이 없으면 결정론적 위반이 있다고 주장하거나
+VIOLATION/PRECHECK_VIOLATION/DETERMINISTIC_VIOLATION 같은 포괄 코드를 만들어서는 안 된다.
+deterministic_precheck의 항목과 코드는 입력에 제공된 그대로만 인용하라.
 severity가 "WARNING"인 항목은 참고하되, 실제 내용을 보고 정말 원칙 위반인지 스스로 판단하라.
 failure_codes는 반드시 포함하라. PASS이면 빈 배열이어야 하고, FAIL이면 원인을 나타내는
 UPPER_SNAKE_CASE 코드가 하나 이상 있어야 한다. reason은 audit_status 및 failure_codes와
@@ -422,9 +428,15 @@ class AuditAgent:
         payload["deterministic_precheck"] = [f.to_dict() for f in findings]
 
         result: Optional[AuditResult] = None
+        validation_issue: Optional[str] = None
         try:
             raw = self._call_with_retry(self._build_messages(payload))
             result = self._parse_and_validate(raw)
+            if result is not None:
+                validation_issue = self._context_validation_issue(result, findings)
+                if validation_issue:
+                    logger.warning("입력 근거 일관성 검증 실패: %s", validation_issue)
+                    result = None
         except UpstageCallError as e:
             logger.error("Upstage 호출 최종 실패: %s", e)
 
@@ -433,7 +445,14 @@ class AuditAgent:
             repair_messages = self._build_messages(payload) + [{
                 "role": "user",
                 "content": (
-                    "이전 응답이 JSON 스키마를 만족하지 않았다. routing_decision/priority/"
+                    "이전 응답이 JSON 스키마 또는 입력 근거 일관성 검증을 만족하지 않았다. "
+                    f"검증 오류: {validation_issue or 'JSON 스키마 오류'}. "
+                    f"실제 deterministic_precheck VIOLATION 코드는 "
+                    f"{[f.code for f in findings if f.severity == 'VIOLATION']}이다. "
+                    "이 목록에 없는 결정론적 위반을 만들어내지 마라. audit_status는 리포트의 "
+                    "취약점 유무가 아니라 앞선 단계의 절차 준수 여부를 평가한다. PoC RAN_CLEAN, "
+                    "not_supported/not vulnerable, 낮은 debate verdict 자체는 감사 실패가 아니다. "
+                    "routing_decision/priority/"
                     "audit_status는 반드시 정의된 값 중 하나여야 한다. failure_codes를 반드시 "
                     "포함하고 PASS이면 빈 배열, FAIL이면 UPPER_SNAKE_CASE 코드 1개 이상으로 "
                     "작성하라. reason은 audit_status와 모순되면 안 된다. 다른 텍스트 없이 "
@@ -443,6 +462,11 @@ class AuditAgent:
             try:
                 raw2 = self._call_with_retry(repair_messages)
                 result = self._parse_and_validate(raw2)
+                if result is not None:
+                    repair_issue = self._context_validation_issue(result, findings)
+                    if repair_issue:
+                        logger.warning("자가 수정 응답의 입력 근거 일관성 검증 실패: %s", repair_issue)
+                        result = None
             except UpstageCallError as e:
                 logger.error("자가 수정 요청도 실패: %s", e)
 
@@ -546,6 +570,51 @@ class AuditAgent:
         except ValidationError as e:
             logger.warning("스키마 검증 실패: %s", e)
             return None
+
+
+    @staticmethod
+    def _context_validation_issue(
+        result: AuditResult,
+        findings: List[DeterministicFinding],
+    ) -> Optional[str]:
+        """LLM이 deterministic_precheck에 없는 위반을 인용하는 것을 거부한다."""
+        violation_codes = {
+            finding.code
+            for finding in findings
+            if finding.severity == "VIOLATION"
+        }
+        reason = result.reason.casefold()
+
+        precheck_terms = (
+            "deterministic_precheck",
+            "deterministic precheck",
+            "결정론적 사전검사",
+            "결정론적 사전 검사",
+            "결정론적 검사",
+        )
+        violation_terms = ("violation", "위반")
+        claims_precheck_violation = (
+            any(term in reason for term in precheck_terms)
+            and any(term in reason for term in violation_terms)
+        )
+        if claims_precheck_violation and not violation_codes:
+            return "deterministic_precheck에는 VIOLATION이 없지만 reason이 위반이 있다고 주장함"
+
+        generic_precheck_codes = {
+            "VIOLATION",
+            "PRECHECK_VIOLATION",
+            "DETERMINISTIC_VIOLATION",
+            "DETERMINISTIC_PRECHECK_VIOLATION",
+        }
+        unsupported_generic_codes = (
+            set(result.failure_codes) & generic_precheck_codes
+        ) - violation_codes
+        if unsupported_generic_codes:
+            return (
+                "입력에 근거하지 않은 포괄적 사전검사 failure_codes: "
+                f"{sorted(unsupported_generic_codes)}"
+            )
+        return None
 
     def _log_decision(
         self,

@@ -100,5 +100,45 @@ class AuditResultContractTest(unittest.TestCase):
         self.assertIn("INCOMPLETE_JUDGE_STAGE", result["failure_codes"])
 
 
+    def test_false_deterministic_violation_is_rejected_and_repaired(self):
+        agent = AuditAgent(AuditAgentConfig(api_key="test"))
+        hallucinated = result_payload(
+            audit_status="FAIL",
+            reason=(
+                "PoC가 RAN_CLEAN이고 verdict가 not_supported이며 "
+                "deterministic_precheck에 VIOLATION이 있어 감사 실패"
+            ),
+            failure_codes=["VIOLATION"],
+        )
+        repaired = result_payload(
+            reason=(
+                "취약점 미재현 결론과 별개로 각 단계가 정해진 절차를 수행했고 "
+                "단계 간 결과가 일관되어 감사 절차를 통과함"
+            )
+        )
+        agent._call_with_retry = Mock(side_effect=[
+            json.dumps(hallucinated, ensure_ascii=False),
+            json.dumps(repaired, ensure_ascii=False),
+        ])
+
+        result = agent.run(
+            parser_result={},
+            fact_check_result={"poc_check": {"status": "RAN_CLEAN"}},
+            dedup_result={"verdict": "NO_MATCH"},
+            debate_judge_result={"verdict": 1, "conclusion": "not_supported"},
+            workflow_status="RUNNING",
+        )
+
+        self.assertEqual(agent._call_with_retry.call_count, 2)
+        self.assertEqual(result["audit_status"], "PASS")
+        self.assertEqual(result["failure_codes"], [])
+
+    def test_prompt_defines_audit_as_process_compliance(self):
+        from audit_agent import SYSTEM_PROMPT
+
+        self.assertIn("취약점 여부가 아니라 파이프라인의 절차 준수 여부", SYSTEM_PROMPT)
+        self.assertIn("RAN_CLEAN", SYSTEM_PROMPT)
+
+
 if __name__ == "__main__":
     unittest.main()
